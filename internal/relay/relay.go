@@ -195,16 +195,6 @@ func (rc *relayContext) forward() error {
 	// 复制请求头
 	rc.copyHeaders(outboundRequest)
 
-	// 记录发送给后端的请求体
-	if outboundRequest.Body != nil {
-		bodyBytes, err := io.ReadAll(outboundRequest.Body)
-		if err == nil {
-			log.Infof("=== Request to backend ===\nURL: %s\nBody: %s\n=========================", outboundRequest.URL.String(), string(bodyBytes))
-			// 重新设置请求体
-			outboundRequest.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
-		}
-	}
-
 	// 发送请求
 	response, err := rc.sendRequest(outboundRequest)
 	if err != nil {
