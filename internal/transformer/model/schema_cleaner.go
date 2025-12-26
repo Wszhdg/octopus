@@ -43,6 +43,16 @@ func cleanSchema(schema map[string]interface{}) map[string]interface{} {
 	delete(result, "additionalProperties")
 	delete(result, "$defs")
 	delete(result, "definitions")
+	delete(result, "minLength")
+	delete(result, "maxLength")
+	delete(result, "exclusiveMinimum")
+	delete(result, "exclusiveMaximum")
+	delete(result, "pattern")
+	delete(result, "minItems")
+	delete(result, "maxItems")
+	delete(result, "format")
+	delete(result, "default")
+	delete(result, "examples")
 
 	// Recursively clean nested schemas
 	if props, ok := result["properties"].(map[string]interface{}); ok {
