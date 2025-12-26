@@ -11,15 +11,20 @@ import (
 	"strings"
 
 	"github.com/bestruirui/octopus/internal/transformer/model"
+	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/xurl"
 	"github.com/samber/lo"
 )
 
-type MessagesOutbound struct{}
+const thoughtSignatureBypass = "context_engineering_is_the_way_to_go"
+
+type MessagesOutbound struct {
+	toolCallIndex int
+}
 
 func (o *MessagesOutbound) TransformRequest(ctx context.Context, request *model.InternalLLMRequest, baseUrl, key string) (*http.Request, error) {
 	// Convert internal request to Gemini format
-	geminiReq := convertLLMToGeminiRequest(request)
+	geminiReq := o.convertLLMToGeminiRequest(request)
 
 	body, err := json.Marshal(geminiReq)
 	if err != nil {
@@ -81,12 +86,13 @@ func (o *MessagesOutbound) TransformResponse(ctx context.Context, response *http
 	}
 
 	// Convert Gemini response to internal format
-	return convertGeminiToLLMResponse(&geminiResp, false), nil
+	return o.convertGeminiToLLMResponse(&geminiResp, false), nil
 }
 
 func (o *MessagesOutbound) TransformStream(ctx context.Context, eventData []byte) (*model.InternalLLMResponse, error) {
 	// Handle [DONE] marker
 	if bytes.HasPrefix(eventData, []byte("[DONE]")) || len(eventData) == 0 {
+		o.toolCallIndex = 0
 		return &model.InternalLLMResponse{
 			Object: "[DONE]",
 		}, nil
@@ -98,8 +104,18 @@ func (o *MessagesOutbound) TransformStream(ctx context.Context, eventData []byte
 		return nil, fmt.Errorf("failed to unmarshal gemini stream chunk: %w", err)
 	}
 
-	// Convert to internal format
-	return convertGeminiToLLMResponse(&geminiResp, true), nil
+	log.Infof("Gemini stream chunk: candidates=%d", len(geminiResp.Candidates))
+	if len(geminiResp.Candidates) > 0 && geminiResp.Candidates[0].Content != nil {
+		log.Infof("Gemini stream parts: %d", len(geminiResp.Candidates[0].Content.Parts))
+		for i, part := range geminiResp.Candidates[0].Content.Parts {
+			if part.FunctionCall != nil {
+				log.Infof("Gemini stream part[%d]: FunctionCall name=%s", i, part.FunctionCall.Name)
+			}
+		}
+	}
+
+	// Convert to internal format, passing the current tool call index
+	return o.convertGeminiToLLMResponse(&geminiResp, true), nil
 }
 
 // Helper functions
@@ -120,7 +136,7 @@ func reasoningToThinkingBudget(effort string) int32 {
 	}
 }
 
-func convertLLMToGeminiRequest(request *model.InternalLLMRequest) *model.GeminiGenerateContentRequest {
+func (o *MessagesOutbound) convertLLMToGeminiRequest(request *model.InternalLLMRequest) *model.GeminiGenerateContentRequest {
 	geminiReq := &model.GeminiGenerateContentRequest{
 		Contents: []*model.GeminiContent{},
 	}
@@ -186,13 +202,30 @@ func convertLLMToGeminiRequest(request *model.InternalLLMRequest) *model.GeminiG
 				Role:  "model",
 				Parts: []*model.GeminiPart{},
 			}
-			// Handle text content
-			if msg.Content.Content != nil && *msg.Content.Content != "" {
+			
+			// Handle reasoning content
+			var reasoning string
+			if msg.ReasoningContent != nil && *msg.ReasoningContent != "" {
+				reasoning = *msg.ReasoningContent
+			} else if msg.Content.Content != nil && strings.HasPrefix(*msg.Content.Content, "<think>") {
+				// Extract reasoning from <think> tags
+				contentStr := *msg.Content.Content
+				start := strings.Index(contentStr, "<think>") + 7
+				end := strings.Index(contentStr, "</think>")
+				if end > start {
+					reasoning = strings.TrimSpace(contentStr[start:end])
+				}
+			}
+			
+			// Add thought part if reasoning exists
+			if reasoning != "" {
 				content.Parts = append(content.Parts, &model.GeminiPart{
-					Text: *msg.Content.Content,
+					Text:    reasoning,
+					Thought: true,
 				})
 			}
-			// Handle tool calls
+			
+			// Handle tool calls with bypass signature
 			if len(msg.ToolCalls) > 0 {
 				for _, toolCall := range msg.ToolCalls {
 					var args map[string]interface{}
@@ -202,6 +235,7 @@ func convertLLMToGeminiRequest(request *model.InternalLLMRequest) *model.GeminiG
 							Name: toolCall.Function.Name,
 							Args: args,
 						},
+						ThoughtSignature: thoughtSignatureBypass,
 					})
 				}
 			}
@@ -352,7 +386,7 @@ func convertLLMToolResultToGeminiContent(msg *model.Message) *model.GeminiConten
 	return content
 }
 
-func convertGeminiToLLMResponse(geminiResp *model.GeminiGenerateContentResponse, isStream bool) *model.InternalLLMResponse {
+func (o *MessagesOutbound) convertGeminiToLLMResponse(geminiResp *model.GeminiGenerateContentResponse, isStream bool) *model.InternalLLMResponse {
 	resp := &model.InternalLLMResponse{
 		Choices: []model.Choice{},
 	}
@@ -384,22 +418,37 @@ func convertGeminiToLLMResponse(geminiResp *model.GeminiGenerateContentResponse,
 			// Extract text and function calls from parts
 			var textParts []string
 			var toolCalls []model.ToolCall
-			var reasoningContent *string
+			var reasoningParts []string
 
-			for idx, part := range candidate.Content.Parts {
+			for _, part := range candidate.Content.Parts {
+				log.Infof("Processing part: Thought=%v, Text=%v, FunctionCall=%v, ThoughtSignature=%v",
+					part.Thought, part.Text != "", part.FunctionCall != nil, part.ThoughtSignature)
+				
 				if part.Thought {
 					// Handle thinking/reasoning content
-					if part.Text != "" && reasoningContent == nil {
-						reasoningContent = &part.Text
+					if part.Text != "" {
+						reasoningParts = append(reasoningParts, part.Text)
+					}
+					// Save thought signature
+					if part.ThoughtSignature != "" && msg.ReasoningSignature == nil {
+						msg.ReasoningSignature = &part.ThoughtSignature
+						log.Infof("Saved thought_signature from thought part: %s", part.ThoughtSignature)
 					}
 				} else if part.Text != "" {
 					textParts = append(textParts, part.Text)
 				}
+				
+				// Save thought signature from any part
+				if part.ThoughtSignature != "" && msg.ReasoningSignature == nil {
+					msg.ReasoningSignature = &part.ThoughtSignature
+					log.Infof("Saved thought_signature from part: %s", part.ThoughtSignature)
+				}
+				
 				if part.FunctionCall != nil {
 					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
 					toolCall := model.ToolCall{
-						Index: idx,
-						ID:    fmt.Sprintf("call_%s_%d", part.FunctionCall.Name, idx),
+						Index: o.toolCallIndex,
+						ID:    fmt.Sprintf("call_%s_%d", part.FunctionCall.Name, o.toolCallIndex),
 						Type:  "function",
 						Function: model.FunctionCall{
 							Name:      part.FunctionCall.Name,
@@ -407,6 +456,8 @@ func convertGeminiToLLMResponse(geminiResp *model.GeminiGenerateContentResponse,
 						},
 					}
 					toolCalls = append(toolCalls, toolCall)
+					log.Infof("Gemini tool call: index=%d, id=%s, name=%s, args=%s", o.toolCallIndex, toolCall.ID, part.FunctionCall.Name, string(argsJSON))
+					o.toolCallIndex++
 				}
 			}
 
@@ -419,8 +470,9 @@ func convertGeminiToLLMResponse(geminiResp *model.GeminiGenerateContentResponse,
 			}
 
 			// Set reasoning content
-			if reasoningContent != nil {
-				msg.ReasoningContent = reasoningContent
+			if len(reasoningParts) > 0 {
+				reasoningText := strings.Join(reasoningParts, "")
+				msg.ReasoningContent = &reasoningText
 			}
 
 			// Set tool calls
