@@ -26,6 +26,7 @@ export interface ChannelFormData {
     proxy: boolean;
     auto_sync: boolean;
     auto_group: AutoGroupType;
+    clean_tool_schema: boolean;
 }
 
 export interface ChannelFormProps {
@@ -338,6 +339,13 @@ export function ChannelForm({
                         onCheckedChange={(checked) => onFormDataChange({ ...formData, auto_sync: checked })}
                     />
                     <span className="text-sm text-card-foreground">{t('autoSync')}</span>
+                </label>
+                <label className="flex items-center gap-2">
+                    <Switch
+                        checked={formData.clean_tool_schema}
+                        onCheckedChange={(checked) => onFormDataChange({ ...formData, clean_tool_schema: checked })}
+                    />
+                    <span className="text-sm text-card-foreground">{t('cleanToolSchema')}</span>
                 </label>
             </div>
 

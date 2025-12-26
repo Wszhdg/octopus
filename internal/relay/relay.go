@@ -173,6 +173,13 @@ func parseRequest(inboundType inbound.InboundType, c *gin.Context) (*model.Inter
 func (rc *relayContext) forward() error {
 	ctx := rc.c.Request.Context()
 
+	// Clean tool schema if enabled
+	if rc.channel.CleanToolSchema && len(rc.internalRequest.Tools) > 0 {
+		log.Infof("Cleaning tool schema for channel '%s', tools count: %d", rc.channel.Name, len(rc.internalRequest.Tools))
+		rc.internalRequest.Tools = model.CleanToolSchemaForGemini(rc.internalRequest.Tools)
+		log.Infof("Tool schema cleaned successfully")
+	}
+
 	// 构建出站请求
 	outboundRequest, err := rc.outAdapter.TransformRequest(
 		ctx,

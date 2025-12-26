@@ -427,7 +427,8 @@
             "autoGroup": "Auto Group",
             "autoGroupNone": "None",
             "autoGroupFuzzy": "Fuzzy",
-            "autoGroupExact": "Exact"
+            "autoGroupExact": "Exact",
+            "cleanToolSchema": "Clean Tool Schema"
         }
     }
 }

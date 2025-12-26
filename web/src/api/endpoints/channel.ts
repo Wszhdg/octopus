@@ -36,6 +36,7 @@ interface ChannelBase {
     proxy: boolean;
     auto_sync: boolean;
     auto_group: AutoGroupType;
+    clean_tool_schema: boolean;
 }
 
 /**

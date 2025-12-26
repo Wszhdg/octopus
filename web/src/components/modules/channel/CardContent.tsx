@@ -39,6 +39,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         proxy: channel.proxy,
         auto_sync: channel.auto_sync,
         auto_group: channel.auto_group,
+        clean_tool_schema: channel.clean_tool_schema || false,
     });
     const t = useTranslations('channel.detail');
 
